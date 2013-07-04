@@ -1,0 +1,17 @@
+#!/bin/bash
+
+# Prepare Global Zone
+if [[ ! -f /var/.vagrant-prepared ]]; then
+    /opt/custom/bin/vagrant-prepare
+    if [[ $? -ne 0 ]]; then
+        echo "Failed to Prepare Guest"
+        exit -1
+    fi
+fi
+
+# Boot Guest Zone
+/opt/custom/bin/vagrant-boot
+
+# Setup Guest Zone
+UUID=$(vmadm list -p alias=vagrant | head -n 1 | sed 's/:.*//')
+zlogin $UUID bash < /opt/custom/bin/vagrant-guest-prepare

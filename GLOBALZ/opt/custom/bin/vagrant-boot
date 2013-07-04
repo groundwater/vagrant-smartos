@@ -1,0 +1,85 @@
+#!/bin/bash
+
+## Configurable
+
+# These must be in the same /24 subnet
+GLOBAL_IP=10.0.0.1
+GUESTZ_IP=10.0.0.2
+
+### Create VM Client ###
+
+# see: imgadm avail
+IMAGE_ID=9eac5c0c-a941-11e2-a7dc-57a6b041988f
+
+# Download Image
+imgadm import $IMAGE_ID
+
+# Create Zone from Image
+echo "Creating Vagrant Zone"
+vmadm create <<EOF
+{
+  "brand": "joyent",
+  "alias": "vagrant",
+  "image_uuid": "$IMAGE_ID",
+  "autoboot": true,
+  "resolvers": ["8.8.8.8","8.8.4.4"],
+  "fs_allowed": "vboxfs",
+  "nics": [
+    {
+      "nic_tag": "stub0",
+      "ip": "$GUESTZ_IP",
+      "netmask": "255.255.255.0",
+      "gateway": "$GLOBAL_IP"
+    }
+  ]
+}
+EOF
+
+UUID=$(vmadm list -p alias=vagrant | head -n 1 | sed 's/:.*//')
+
+# This assumes you chose `dhcp` in the original smartos install
+# otherwise e1000g0/ might be names something else
+# This is the address object of your main NIC in the global zone
+# see: ipadm show-addr
+ADDR_OBJ=e1000g0/
+
+## Setup Internal Network
+# create an internal network and provide NAT and port forwarding to it
+dladm create-etherstub stub0
+
+# Attach global zone to internal network
+dladm create-vnic -l stub0 vnic0
+ipadm create-if vnic0
+ipadm create-addr -T static -a $GLOBAL_IP/24 vnic0/static
+
+IP_ADDRESS=$(ipadm show-addr $ADDR_OBJ -p -o ADDR | sed 's/\/.*//')
+# Setup NAT and Port Forwarding
+cat <<EOH > /etc/ipf/ipnat.conf
+map e1000g0 0/0 -> $IP_ADDRESS/32
+rdr e1000g0 0/0 -> $GUESTZ_IP
+EOH
+
+# Reload ipnat 
+ipnat -FCf /etc/ipf/ipnat.conf
+ipnat -l
+
+# Turn on services
+svcadm enable ipfilter
+routeadm -u -e ipv4-forwarding
+
+# Add Kernel Modules
+HOME_DIR=/opt/vagrant
+cp $HOME_DIR/vboxfs          /kernel/fs/amd64/
+cp $HOME_DIR/vboxguest       /kernel/drv/amd64/
+cp $HOME_DIR/vboxguest.conf  /kernel/drv/
+
+# Enable kernel modules
+add_drv -m '* 0666 root sys' -i 'pci80ee,cafe' vboxguest
+devfsadm -i vboxguest
+ln -fns /devices/pci@0,0/pci80ee,cafe@4:vboxguest /dev/vboxguest
+modload /kernel/fs/amd64/vboxfs
+
+# Copy vboxfs mount command to zone
+CUSTOM_BIN=/zones/$UUID/root/opt/custom/bin
+mkdir -p $CUSTOM_BIN
+cp $HOME_DIR/vboxfsmount $CUSTOM_BIN

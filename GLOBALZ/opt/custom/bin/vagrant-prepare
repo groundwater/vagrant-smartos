@@ -1,0 +1,63 @@
+#!/bin/bash
+
+### VirtualBox Guest Additions ###
+
+HOME_DIR=/opt/vagrant
+TEMP_DIR=/var/vagrant
+MOUNT_DIR=/mnt
+PKG_URL="http://download.virtualbox.org/virtualbox/4.2.8/VBoxGuestAdditions_4.2.8.iso"
+
+mkdir -p $HOME_DIR
+mkdir -p $TEMP_DIR
+
+echo "Installing Virtualbox Guest Additions"
+
+# Download ISO or Use Existing Download
+ISO=$TEMP_DIR/vbox-additions.iso
+
+if [[ ! -f $ISO ]]; then
+    echo "Downloading ISO"
+    curl -Lo $ISO "$PKG_URL"
+else
+    echo "Using Existing ISO $ISO"
+fi
+
+# Test Download
+if [[ ! -f $ISO ]]; then
+    echo "Failed to Download ISO"
+    exit -1
+fi
+
+# Mount ISO
+VMNT=$MOUNT_DIR/vbox
+mkdir -p $VMNT
+NUM=$(lofiadm -a $ISO || lofiadm -f $ISO)
+mount -o ro -F hsfs $NUM $VMNT
+
+# Test Mount
+mounted=$(cat /etc/mnttab  | grep $MOUNT_DIR/vbox | wc -l)
+if [[ $mounted -ne 1 ]]; then
+    echo "Failed to Mount ISO"
+    exit -2
+fi
+
+# Test for package
+GA=$TEMP_DIR/GuestAdditions
+PKG=$VMNT/VBoxSolarisAdditions.pkg
+if [[ ! -f $PKG ]]; then
+    echo "Failed to Find Solaris Guest Additions Package"
+    exit -3
+fi
+
+# Extract Package
+mkdir -p $GA
+pkgtrans -o $PKG $GA all
+
+# Copy in kernel modules from package
+REL=$GA/SUNWvboxguest/reloc
+cp $REL/opt/VirtualBoxAdditions/amd64/vboxfs      $HOME_DIR
+cp $REL/opt/VirtualBoxAdditions/amd64/vboxfsmount $HOME_DIR
+cp $REL/usr/kernel/drv/amd64/vboxguest            $HOME_DIR
+cp $REL/usr/kernel/drv/vboxguest.conf             $HOME_DIR
+
+echo "Installation Done"
